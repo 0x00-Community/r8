@@ -469,8 +469,9 @@ fn interp(ctx: *mut Ctx, callee: u64, this: u64, a0: u64, a1: u64, a2: u64) -> u
     }
 }
 
-/// Executable memory: big shared-memory chunks mapped twice, writable at one address and executable at another, that
-/// pieces of code are cut from (no permission changes per piece), kept for as long as the JIT lives.
+/// Executable memory that pieces of code are cut from (no permission changes per piece), kept for as long as the JIT
+/// lives. On Linux a chunk is an anonymous file mapped shared twice, writable at one address and executable at
+/// another. Elsewhere both views are one private anonymous mapping, readable, writable and executable.
 #[derive(Default)]
 pub struct Arena {
     /// (writable view, executable view)
@@ -486,6 +487,7 @@ impl Arena {
     const ALIGN: usize = 16;
 
     /// A chunk of `len` bytes: its two views
+    #[cfg(target_os = "linux")]
     fn chunk(len: usize) -> Option<(Mapped, Mapped)> {
         // SAFETY: a fresh anonymous file, sized, mapped shared twice
         unsafe {
@@ -501,6 +503,20 @@ impl Arena {
                 return None;
             }
             Some((Mapped { at: w.cast(), len }, Mapped { at: x.cast(), len }))
+        }
+    }
+
+    /// A chunk of `len` bytes: both views of one private anonymous mapping
+    #[cfg(not(target_os = "linux"))]
+    fn chunk(len: usize) -> Option<(Mapped, Mapped)> {
+        // SAFETY: a fresh private anonymous mapping, readable, writable and executable
+        unsafe {
+            let at = libc::mmap(core::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC, libc::MAP_PRIVATE | libc::MAP_ANON, -1, 0);
+            if at == libc::MAP_FAILED {
+                return None;
+            }
+            let at = at.cast();
+            Some((Mapped { at, len }, Mapped { at, len }))
         }
     }
 
